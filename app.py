@@ -1,73 +1,92 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-st.set_page_config(page_title="Дашборд производства стали", layout="wide")
+# Настройка страницы
+st.set_page_config(page_title="Дашборд отгрузки стали", layout="wide")
 
-st.title("📊 Аналитика производства стали")
+st.title("📊 Аналитика производства стали S700MC")
 
 # Загрузка данных
 @st.cache_data
 def load_data():
-    df = pd.read_excel('steel_production_data.xlsx')
-    df['Дата обработки'] = pd.to_datetime(df['Дата обработки'])
+    # Предполагаем расширение .xlsx, так как это Excel
+    df = pd.read_excel("ProductionS700MC.xlsx")
+    # Преобразуем дату в формат datetime, если такой столбец есть
+    # Если столбца "Дата" нет, создадим тестовую колонку для демонстрации динамики
+    if 'Дата' in df.columns:
+        df['Дата'] = pd.to_datetime(df['Дата'])
     return df
 
 try:
     df = load_data()
 
-    # БОКОВАЯ ПАНЕЛЬ (ФИЛЬТРЫ)
+    # --- САЙДБАР (ФИЛЬТРЫ) ---
     st.sidebar.header("Фильтры")
     
-    # Фильтр по дате
-    min_date = df['Дата обработки'].min().date()
-    max_date = df['Дата обработки'].max().date()
-    date_range = st.sidebar.date_input("Период", [min_date, max_date])
+    recipient = st.sidebar.multiselect(
+        "Выберите грузополучателя:",
+        options=df["Грузополучатель"].unique(),
+        default=df["Грузополучатель"].unique()
+    )
 
-    # Фильтр по марке
-    selected_marks = st.sidebar.multiselect("Выберите марку", df['Марка'].unique(), default=df['Марка'].unique())
+    thickness = st.sidebar.slider(
+        "Толщина:",
+        float(df["Толщина"].min()),
+        float(df["Толщина"].max()),
+        (float(df["Толщина"].min()), float(df["Толщина"].max()))
+    )
 
-    # Фильтрация данных
-    mask = (df['Дата обработки'].dt.date >= date_range[0]) & \
-           (df['Дата обработки'].dt.date <= date_range[1]) & \
-           (df['Марка'].isin(selected_marks))
-    
-    filtered_df = df.loc[mask]
+    # Фильтрация датафрейма
+    mask = (
+        df["Грузополучатель"].isin(recipient) &
+        df["Толщина"].between(*thickness)
+    )
+    df_filtered = df[mask]
 
-    # ГЛАВНЫЕ ПОКАЗАТЕЛИ
-    col1, col2, col3 = st.columns(3)
+    # --- ОСНОВНЫЕ ПОКАЗАТЕЛИ ---
+    total_mass = df_filtered["Масса"].sum()
+    st.metric("Общий объем производства", f"{total_mass:,.2f} тонн")
+
+    col1, col2 = st.columns(2)
+
     with col1:
-        st.metric("Общая масса (т)", f"{filtered_df['Масса (учет.)'].sum():,.2f}")
+        # а) Динамика производства (если есть столбец Дата)
+        if 'Дата' in df_filtered.columns:
+            st.subheader("Динамика по дням")
+            daily_prod = df_filtered.groupby('Дата')['Масса'].sum().reset_index()
+            fig_date = px.line(daily_prod, x='Дата', y='Масса', markers=True)
+            st.plotly_chart(fig_date, use_container_width=True)
+        else:
+            st.info("Добавьте столбец 'Дата' для отображения динамики.")
+
+        # в) По грузополучателям
+        st.subheader("Объем по грузополучателям")
+        fig_rec = px.bar(df_filtered, x='Грузополучатель', y='Масса', color='Грузополучатель')
+        st.plotly_chart(fig_rec, use_container_width=True)
+
     with col2:
-        st.metric("Кол-во записей", len(filtered_df))
-    with col3:
-        st.metric("Ср. толщина (мм)", round(filtered_df['Толщина'].mean(), 1))
+        # б) В разрезе толщин и ширин
+        st.subheader("Распределение: Толщина vs Ширина")
+        fig_scatter = px.scatter(
+            df_filtered, 
+            x="Толщина", 
+            y="Ширина", 
+            size="Масса", 
+            color="Грузополучатель",
+            hover_name="Грузополучатель"
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
 
-    # ГРАФИКИ
-    st.subheader("Динамика производства")
-    line_chart = px.line(filtered_df.groupby('Дата обработки')['Масса (учет.)'].sum().reset_index(), 
-                         x='Дата обработки', y='Масса (учет.)', 
-                         title="Выпуск продукции по дням")
-    st.plotly_chart(line_chart, use_container_width=True)
+        # Дополнительная гистограмма толщин
+        st.subheader("Объем по толщинам")
+        fig_thick = px.histogram(df_filtered, x="Толщина", y="Масса", nbins=20)
+        st.plotly_chart(fig_thick, use_container_width=True)
 
-    col_left, col_right = st.columns(2)
-    
-    with col_left:
-        st.subheader("Распределение по маркам")
-        pie_chart = px.pie(filtered_df, values='Масса (учет.)', names='Марка')
-        st.plotly_chart(pie_chart, use_container_width=True)
-
-    with col_right:
-        st.subheader("Виды ЕМ")
-        bar_chart = px.bar(filtered_df.groupby('Вид ЕМ')['Масса (учет.)'].sum().reset_index(), 
-                           x='Вид ЕМ', y='Масса (учет.)', color='Вид ЕМ')
-        st.plotly_chart(bar_chart, use_container_width=True)
-
-    # ТАБЛИЦА
+    # Таблица данных
     with st.expander("Посмотреть исходные данные"):
-        st.write(filtered_df)
+        st.write(df_filtered)
 
 except Exception as e:
-    st.error(f"Ошибка загрузки данных: {e}")
-    st.info("Пожалуйста, убедитесь, что файл 'steel_production_data.xlsx' находится в той же папке.")
+    st.error(f"Ошибка при загрузке файла: {e}")
+    st.info("Убедитесь, что файл 'ProductionS700MC.xlsx' лежит в том же репозитории на GitHub, что и этот код.")
